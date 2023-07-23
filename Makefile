@@ -1,5 +1,5 @@
 CC=gcc
-LD=-lusb-1.0
+LD=-lusb-1.0 -lm
 SRC=usb-comm.c
 
 all:
