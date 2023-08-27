@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <stdlib.h>
 
 typedef struct
 {
@@ -246,9 +247,67 @@ USB_PllSetFrequency  set_frequency(double frequency)
   return packet;
 }
 
+static unsigned long num_bytes = 0, num_xfer = 0;
+
+static void cb_xfr(struct libusb_transfer *xfr)
+{
+	unsigned int i;
+
+	if (xfr->status != LIBUSB_TRANSFER_COMPLETED) {
+		fprintf(stderr, "transfer status %d\n", xfr->status);
+		libusb_free_transfer(xfr);
+		exit(3);
+	}
+
+	if (xfr->type == LIBUSB_TRANSFER_TYPE_ISOCHRONOUS) {
+		for (i = 0; i < xfr->num_iso_packets; i++) {
+			struct libusb_iso_packet_descriptor *pack = &xfr->iso_packet_desc[i];
+
+			if (pack->status != LIBUSB_TRANSFER_COMPLETED) {
+				fprintf(stderr, "Error: pack %u status %d\n", i, pack->status);
+				exit(5);
+			}
+
+			printf("pack%u length:%u, actual_length:%u\n", i, pack->length, pack->actual_length);
+		}
+	}
+
+	printf("length:%u, actual_length:%u\n", xfr->length, xfr->actual_length);
+	for (i = 0; i < xfr->actual_length; i++) {
+		printf("%02x", xfr->buffer[i]);
+		if (i % 16)
+			printf("\n");
+		else if (i % 8)
+			printf("  ");
+		else
+			printf(" ");
+	}
+	num_bytes += xfr->actual_length;
+	num_xfer++;
+
+	if (libusb_submit_transfer(xfr) < 0) {
+		fprintf(stderr, "error re-submitting URB\n");
+		exit(1);
+	}
+}
+
+static int isochronuous_transfer(libusb_device_handle *h) 
+{
+  static uint8_t buff[2048];
+  static struct libusb_transfer *xfr;
+  int num_iso_pack = 2;
+
+  xfr = libusb_alloc_transfer(num_iso_pack);
+  libusb_fill_iso_transfer(xfr, h, 3, buff, sizeof(buff), num_iso_pack, cb_xfr, NULL, 0);
+
+  libusb_set_iso_packet_lengths(xfr, sizeof(buff)/num_iso_pack);
+  return libusb_submit_transfer(xfr);
+}
+
 int main()
 {
-  int ret = libusb_init(NULL);
+  libusb_context *ctx;
+  int ret = libusb_init(&ctx);
   if (ret)
   {
     printf("%s:%d USB error: %s\n", __FILE__, __LINE__, libusb_error_name(ret));
@@ -267,7 +326,7 @@ int main()
   libusb_device *dev = libusb_get_device(handle);
   uint8_t bus = libusb_get_bus_number(dev);
 
-  for (int iface = 0; iface < 2; iface++)
+  for (int iface = 0; iface < 1; iface++)
   {
     int r = libusb_claim_interface(handle, iface);
 
@@ -290,7 +349,7 @@ int main()
   /*                           sizeof(packet), &len, 1000); */
 
 
-  USB_PllSetFrequency config = set_frequency(90.0e6);
+  USB_PllSetFrequency config = set_frequency(35.0e6);
   len = 0;
   /* USB_PllSetFrequency adf435x_config_10MHz = { */
   /*   .command = PLL_SET_FREQUENCY, */
@@ -302,13 +361,18 @@ int main()
   libusb_interrupt_transfer(handle, 0x01,
                             (unsigned char *)&config,
                             sizeof(config), &len, 1000);
-  
-  /* char buffer[64]; */
+
+
+  uint8_t data[1024] = {};
+  len = 0;
+  libusb_bulk_transfer(handle, 0x82, data, 1024, &len, 1000);
+  printf("Bulk transfer len: %d, data: %s\n", len, data);
+
+  isochronuous_transfer(handle);
+/* char buffer[64]; */
   /* len = 0; */
   /* libusb_interrupt_transfer(handle, 0x81, buffer, 64, &len, 1000); */
   /* printf("len: %d %s\n", len, buffer); */
 
-
-  libusb_exit(NULL);
+  //  libusb_exit(NULL);
 }    
-
